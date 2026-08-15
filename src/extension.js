@@ -44,6 +44,7 @@ function createController({ extensionAPI }) {
     const topbar = createTopbar({ onOpenDashboard: () => dashboard.open() });
     let destroyed = false;
     let detachPomodoro = null;
+    let detachTaskCompletion = null;
 
     /** Task text of the block a menu entry was opened on, following references. */
     const targetString = context => {
@@ -222,6 +223,7 @@ function createController({ extensionAPI }) {
             registerCommands();
             pomodoro.load();
             detachPomodoro = pomodoro.attach();
+            detachTaskCompletion = clock.attachTaskCompletion();
             topbar.mount();
             // The graph is the source of truth, so a reload picks any clock left
             // running — including one abandoned days ago — straight back up.
@@ -230,6 +232,8 @@ function createController({ extensionAPI }) {
         destroy() {
             if (destroyed) return;
             destroyed = true;
+            detachTaskCompletion?.();
+            detachTaskCompletion = null;
             detachPomodoro?.();
             detachPomodoro = null;
             pomodoro.reset();

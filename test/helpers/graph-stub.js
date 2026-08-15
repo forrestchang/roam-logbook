@@ -12,6 +12,7 @@ let nextUid = 0;
 export function installGraph(blocks = []) {
     nextUid = 0;
     const store = new Map();
+    const pullWatches = new Set();
 
     for (const block of blocks) {
         store.set(block.uid, {
@@ -30,6 +31,18 @@ export function installGraph(blocks = []) {
     // Order is implicit in insertion for seeds; explicit once blocks are created.
     let order = 0;
     for (const block of store.values()) block.order = order++;
+
+    const watchedUid = entityId => entityId.match(/^\[:block\/uid\s+"([^"]+)"\]$/)?.[1] ?? null;
+
+    const notifyPullWatches = async (uid, beforeString, afterString) => {
+        for (const watch of [...pullWatches]) {
+            if (watch.uid !== uid || !watch.pattern.includes(':block/string')) continue;
+            await watch.callback(
+                { ':block/string': beforeString },
+                { ':block/string': afterString }
+            );
+        }
+    };
 
     const q = (datalog, ...args) => {
         if (datalog.includes('LOGBOOK:')) {
@@ -79,6 +92,20 @@ export function installGraph(blocks = []) {
         util: { generateUID: () => `uid${++nextUid}` },
         data: {
             q,
+            addPullWatch: (pattern, entityId, callback) => {
+                pullWatches.add({ pattern, entityId, uid: watchedUid(entityId), callback });
+            },
+            removePullWatch: (pattern, entityId, callback) => {
+                for (const watch of pullWatches) {
+                    if (
+                        watch.pattern === pattern &&
+                        watch.entityId === entityId &&
+                        watch.callback === callback
+                    ) {
+                        pullWatches.delete(watch);
+                    }
+                }
+            },
             block: {
                 create: async ({ location, block }) => {
                     store.set(block.uid, {
@@ -91,7 +118,11 @@ export function installGraph(blocks = []) {
                 },
                 update: async ({ block }) => {
                     const existing = store.get(block.uid);
-                    if (existing) existing.string = block.string;
+                    if (existing && existing.string !== block.string) {
+                        const beforeString = existing.string;
+                        existing.string = block.string;
+                        await notifyPullWatches(block.uid, beforeString, block.string);
+                    }
                 },
                 delete: async ({ block }) => {
                     for (const child of childrenOf(block.uid)) store.delete(child.uid);
@@ -110,7 +141,7 @@ export function installGraph(blocks = []) {
     if (globalThis.window) globalThis.window.roamAlphaAPI = api;
     else globalThis.window = { roamAlphaAPI: api };
 
-    return { store, childrenOf, api };
+    return { store, childrenOf, api, pullWatchCount: () => pullWatches.size };
 }
 
 export function uninstallGraph() {

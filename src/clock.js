@@ -7,7 +7,7 @@
  */
 
 import { readAllEntries } from './entries.js';
-import { DRAWER_LABEL, formatClockLine, isDrawerBlock, parseClockLine } from './org.js';
+import { DRAWER_LABEL, formatClockLine, isDrawerBlock, parseClockLine, taskStatus } from './org.js';
 import {
     createBlock,
     deleteBlock,
@@ -15,6 +15,7 @@ import {
     getChildren,
     resolveReferencedUid,
     updateBlock,
+    watchBlockString,
 } from './roam.js';
 import { allowMultipleClocks } from './settings.js';
 
@@ -69,6 +70,61 @@ export function refresh() {
 export function reset() {
     running = [];
     listeners.clear();
+}
+
+/**
+ * Close a task's active clock when its checkbox changes to DONE.
+ *
+ * Watches track only currently running tasks and are reconciled from the same
+ * derived state as the topbar. The status check on every refresh also catches a
+ * task that was completed while this extension was not loaded.
+ */
+export function attachTaskCompletion({ now = () => new Date() } = {}) {
+    const watches = new Map();
+    const stopping = new Map();
+    let detached = false;
+
+    const stopIfDone = (taskUid, string) => {
+        if (detached || taskStatus(string) !== 'DONE') return Promise.resolve(false);
+        if (stopping.has(taskUid)) return stopping.get(taskUid);
+
+        const operation = clockOutBlock(taskUid, { now: now() })
+            .catch(error => {
+                console.error('[roam-logbook] could not stop completed task', error);
+                return false;
+            })
+            .finally(() => stopping.delete(taskUid));
+        stopping.set(taskUid, operation);
+        return operation;
+    };
+
+    const unsubscribe = subscribe(entries => {
+        const activeTaskUids = new Set(entries.map(entry => entry.taskUid));
+
+        for (const [taskUid, unwatch] of watches) {
+            if (activeTaskUids.has(taskUid)) continue;
+            unwatch();
+            watches.delete(taskUid);
+        }
+
+        for (const entry of entries) {
+            if (!watches.has(entry.taskUid)) {
+                watches.set(
+                    entry.taskUid,
+                    watchBlockString(entry.taskUid, string => stopIfDone(entry.taskUid, string))
+                );
+            }
+            void stopIfDone(entry.taskUid, entry.taskString);
+        }
+    });
+
+    return () => {
+        if (detached) return;
+        detached = true;
+        unsubscribe();
+        for (const unwatch of watches.values()) unwatch();
+        watches.clear();
+    };
 }
 
 /**

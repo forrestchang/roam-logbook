@@ -64,6 +64,41 @@ export function getBlockString(uid) {
 }
 
 /**
+ * Watch one block's text in the graph. Returns a function that removes the watch.
+ *
+ * Pull watches follow the entity rather than a rendered checkbox, so changes made
+ * through a reference, on another page, or by another Roam surface all arrive here.
+ */
+export function watchBlockString(uid, callback) {
+    const add = resolve(null, 'addPullWatch');
+    const remove = resolve(null, 'removePullWatch');
+    if (!uid || !add || !remove) return () => {};
+
+    const pattern = '[:block/string]';
+    const entityId = `[:block/uid ${JSON.stringify(uid)}]`;
+    const handler = (_before, after) =>
+        callback(after?.[':block/string'] ?? getBlockString(uid));
+
+    try {
+        add(pattern, entityId, handler);
+    } catch (error) {
+        console.error('[roam-logbook] could not watch task status', error);
+        return () => {};
+    }
+
+    let watching = true;
+    return () => {
+        if (!watching) return;
+        watching = false;
+        try {
+            remove(pattern, entityId, handler);
+        } catch (error) {
+            console.error('[roam-logbook] could not remove task-status watch', error);
+        }
+    };
+}
+
+/**
  * Follow a block that is nothing but a `((reference))` through to what it points at.
  *
  * A bare reference is transparent everywhere in this extension: clocking one logs

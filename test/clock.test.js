@@ -135,6 +135,45 @@ test('clocking out a block finds its running entry', async () => {
     assert.equal(await clock.clockOutBlock('taskone01', { now: AT_1658 }), false);
 });
 
+test('marking a running task done closes only that task clock', async t => {
+    setExtensionAPI({ settings: { get: key => (key === 'allowMultipleClocks' ? true : undefined) } });
+    const graph = seed([TASK, OTHER]);
+    const detach = clock.attachTaskCompletion({ now: () => AT_1658 });
+    t.after(detach);
+
+    await clock.clockIn('taskone01', { now: AT_1558 });
+    await clock.clockIn('tasktwo02', { now: AT_1558 });
+    assert.equal(graph.pullWatchCount(), 2);
+
+    await graph.api.data.block.update({
+        block: { uid: 'taskone01', string: '{{[[DONE]]}} this is a test task' },
+    });
+
+    assert.deepEqual(clockLinesOf(graph, 'taskone01'), [
+        'CLOCK:: [2026-08-05 Wed 15:58]--[2026-08-05 Wed 16:58] => 1:00',
+    ]);
+    assert.deepEqual(clock.getRunning().map(entry => entry.taskUid), ['tasktwo02']);
+    assert.equal(graph.pullWatchCount(), 1);
+});
+
+test('attaching completion handling closes an already-done running task', async t => {
+    const graph = seed([
+        { ...TASK, string: '{{[[DONE]]}} this is a test task' },
+        { uid: 'drawer001', string: 'LOGBOOK::', parent: 'taskone01' },
+        { uid: 'entry0001', string: 'CLOCK:: [2026-08-05 Wed 15:58]', parent: 'drawer001' },
+    ]);
+
+    const detach = clock.attachTaskCompletion({ now: () => AT_1658 });
+    t.after(detach);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepEqual(clockLinesOf(graph, 'taskone01'), [
+        'CLOCK:: [2026-08-05 Wed 15:58]--[2026-08-05 Wed 16:58] => 1:00',
+    ]);
+    assert.equal(clock.getRunning().length, 0);
+    assert.equal(graph.pullWatchCount(), 0);
+});
+
 test('an end before the start clamps to a zero-length session', async () => {
     const graph = seed([TASK]);
     await clock.clockIn('taskone01', { now: AT_1658 });
