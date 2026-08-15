@@ -204,6 +204,24 @@ function getChildren(uid) {
   );
   return rows.map(([childUid, string, order]) => ({ uid: childUid, string, order })).sort((a, b) => a.order - b.order);
 }
+function getPageUid(title) {
+  if (!title)
+    return null;
+  const rows = query(
+    `[:find ?page-uid :in $ ?title
+          :where [?p :node/title ?title] [?p :block/uid ?page-uid]]`,
+    title
+  );
+  return rows[0]?.[0] ?? null;
+}
+async function createPage(title, uid) {
+  const create = resolve("page", "create", "createPage");
+  if (!create)
+    throw new Error("roamAlphaAPI page.create unavailable");
+  const pageUid = uid || generateUid();
+  await create({ page: { title, uid: pageUid } });
+  return pageUid;
+}
 async function createBlock({ parentUid, order, string, uid }) {
   const create = resolve("block", "create", "createBlock");
   if (!create)
@@ -241,6 +259,14 @@ async function openBlock(uid) {
     await api?.ui?.mainWindow?.openBlock?.({ block: { uid } });
   } catch (error) {
     console.error("[roam-logbook] could not open block", uid, error);
+  }
+}
+async function openPage(title) {
+  const api = getApi();
+  try {
+    await api?.ui?.mainWindow?.openPage?.({ page: { title } });
+  } catch (error) {
+    console.error("[roam-logbook] could not open page", title, error);
   }
 }
 
@@ -510,6 +536,121 @@ function isBlockRunning(blockUid) {
   return running.some((entry) => entry.taskUid === taskUid);
 }
 
+// src/categories.js
+var CATEGORY_PARENT_RE = /^\s*categor(?:y|ies)\s*:{0,2}\s*$/i;
+var MAX_WALK = 50;
+var NO_HIERARCHY = { parentOf: {}, stringOf: {}, mirrorsOf: {} };
+function isCategoryParent(string) {
+  return typeof string === "string" && CATEGORY_PARENT_RE.test(string);
+}
+function parseCategoryName(string) {
+  if (typeof string !== "string")
+    return null;
+  const trimmed = string.trim();
+  if (!trimmed)
+    return null;
+  const bracketed = /^#?\[\[(.+)\]\]$/.exec(trimmed);
+  if (bracketed)
+    return bracketed[1].trim() || null;
+  const tag = /^#(\S+)$/.exec(trimmed);
+  if (tag)
+    return tag[1].trim() || null;
+  return trimmed;
+}
+function categoryNames(blocks) {
+  const names = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const block of blocks) {
+    const name = parseCategoryName(typeof block === "string" ? block : block?.string);
+    if (!name)
+      continue;
+    const key = name.toLowerCase();
+    if (seen.has(key))
+      continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}
+var escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var TAG_END = `(?=$|[\\s,.;:!?)\\]}"'\\u3000-\\u303f\\uff01-\\uff65])`;
+function referencesPage(string, name) {
+  const escaped = escapeRe(name);
+  if (new RegExp(`\\[\\[${escaped}\\]\\]`, "i").test(string))
+    return true;
+  if (/\s/.test(name))
+    return false;
+  return new RegExp(`#${escaped}${TAG_END}`, "i").test(string);
+}
+function findCategory(string, categories) {
+  if (typeof string !== "string" || !string)
+    return null;
+  for (const name of categories) {
+    if (referencesPage(string, name))
+      return name;
+  }
+  return null;
+}
+function assignCategories(taskStrings, { categories = [], hierarchy = NO_HIERARCHY } = {}) {
+  const categoryOf = /* @__PURE__ */ new Map();
+  const uids = Object.keys(taskStrings);
+  if (categories.length === 0) {
+    for (const uid of uids)
+      categoryOf.set(uid, null);
+    return categoryOf;
+  }
+  const rank = new Map(categories.map((name, index) => [name, index]));
+  const textOf = (uid) => taskStrings[uid] ?? hierarchy.stringOf[uid] ?? null;
+  const walk = (uid) => {
+    let frontier = [uid, ...hierarchy.mirrorsOf[uid] || []];
+    const seen = new Set(frontier);
+    for (let depth = 0; depth < MAX_WALK && frontier.length > 0; depth += 1) {
+      let best = null;
+      for (const current of frontier) {
+        const found = findCategory(textOf(current), categories);
+        if (found && (best === null || rank.get(found) < rank.get(best)))
+          best = found;
+      }
+      if (best)
+        return best;
+      const next = [];
+      for (const current of frontier) {
+        const parent = hierarchy.parentOf[current];
+        if (!parent || seen.has(parent))
+          continue;
+        seen.add(parent);
+        next.push(parent);
+      }
+      frontier = next;
+    }
+    return null;
+  };
+  for (const uid of uids)
+    categoryOf.set(uid, walk(uid));
+  return categoryOf;
+}
+
+// src/config.js
+var CONFIG_PAGE_TITLE = "roam/depot/roam-logbook";
+var CATEGORY_BLOCK = "category";
+function readCategories() {
+  const pageUid = getPageUid(CONFIG_PAGE_TITLE);
+  if (!pageUid)
+    return [];
+  const parent = getChildren(pageUid).find((child) => isCategoryParent(child.string));
+  if (!parent)
+    return [];
+  return categoryNames(getChildren(parent.uid));
+}
+async function openCategoryConfig() {
+  const pageUid = getPageUid(CONFIG_PAGE_TITLE) || await createPage(CONFIG_PAGE_TITLE);
+  const children = getChildren(pageUid);
+  if (!children.some((child) => isCategoryParent(child.string))) {
+    await createBlock({ parentUid: pageUid, order: children.length, string: CATEGORY_BLOCK });
+  }
+  await openPage(CONFIG_PAGE_TITLE);
+}
+
 // src/dom.js
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -593,6 +734,32 @@ function summariseByTask(entries, now) {
   }
   return [...byTask.values()].sort((a, b) => b.minutes - a.minutes);
 }
+function summariseByCategory(entries, { categoryOf, categories, now }) {
+  if (categories.length === 0)
+    return [];
+  const rows = new Map(
+    categories.map((name) => [name, { name, minutes: 0, sessions: 0, tasks: /* @__PURE__ */ new Set() }])
+  );
+  const untagged = { name: null, minutes: 0, sessions: 0, tasks: /* @__PURE__ */ new Set() };
+  for (const entry of entries) {
+    const name = categoryOf.get(entry.taskUid) ?? null;
+    const row = name !== null && rows.get(name) || untagged;
+    row.minutes += entryMinutes(entry, now);
+    row.sessions += 1;
+    row.tasks.add(entry.taskUid);
+  }
+  const total = totalMinutes(entries, now);
+  const finish = (row) => ({
+    name: row.name,
+    minutes: row.minutes,
+    sessions: row.sessions,
+    tasks: row.tasks.size,
+    share: total > 0 ? row.minutes / total : 0
+  });
+  const rank = new Map(categories.map((name, index) => [name, index]));
+  const listed = [...rows.values()].sort((a, b) => b.minutes - a.minutes || rank.get(a.name) - rank.get(b.name)).map(finish);
+  return untagged.sessions > 0 ? [...listed, finish(untagged)] : listed;
+}
 function summariseByDay(entries, now, days) {
   const buckets = /* @__PURE__ */ new Map();
   for (const entry of entries) {
@@ -607,10 +774,10 @@ function summariseByDay(entries, now, days) {
   }
   return series;
 }
-var MAX_WALK = 50;
+var MAX_WALK2 = 50;
 function nearestTaskAncestor(uid, { parentOf, stringOf }) {
   let current = parentOf[uid];
-  for (let steps = 0; current && steps < MAX_WALK; steps += 1) {
+  for (let steps = 0; current && steps < MAX_WALK2; steps += 1) {
     if (isTaskBlock(stringOf[current]))
       return current;
     current = parentOf[current];
@@ -706,12 +873,19 @@ function flattenForest(forest, options = {}, depth = 0) {
     return collapsed ? [row] : [row, ...flattenForest(node.children, options, depth + 1)];
   });
 }
-function buildDashboard(entries, { now, rangeId, hierarchy = EMPTY_HIERARCHY }) {
+function buildDashboard(entries, { now, rangeId, hierarchy = EMPTY_HIERARCHY, categories = [] }) {
+  var _a;
   const inRange = filterByRange(entries, rangeId, now);
   const tasks = summariseByTask(inRange, now);
+  const taskStrings = {};
+  for (const entry of inRange)
+    taskStrings[_a = entry.taskUid] ?? (taskStrings[_a] = entry.taskString);
+  const categoryOf = assignCategories(taskStrings, { categories, hierarchy });
   return {
     rangeId,
     entries: inRange,
+    categoryOf,
+    categories: summariseByCategory(inRange, { categoryOf, categories, now }),
     // Summed from entries, so this stays the honest figure even when the tree
     // shows the same task under more than one parent.
     totalMinutes: totalMinutes(inRange, now),
@@ -742,7 +916,12 @@ function createDashboard() {
     const now = /* @__PURE__ */ new Date();
     const entries = readAllEntries();
     const hierarchy = readHierarchy([...new Set(entries.map((entry) => entry.taskUid))]);
-    const model = buildDashboard(entries, { now, rangeId, hierarchy });
+    const model = buildDashboard(entries, {
+      now,
+      rangeId,
+      hierarchy,
+      categories: readCategories()
+    });
     bodyNode.replaceChildren();
     const rangeLabel = getRange(rangeId).label;
     const duplicatesFixedCard = rangeId === "today" || rangeId === "week";
@@ -764,6 +943,9 @@ function createDashboard() {
       return;
     }
     bodyNode.appendChild(daysSection(model.days));
+    if (model.categories.length > 0) {
+      bodyNode.appendChild(categoriesSection(model.categories));
+    }
     bodyNode.appendChild(tasksSection(model.tree));
   };
   const statsRow = (pairs) => {
@@ -844,6 +1026,68 @@ function createDashboard() {
     section.appendChild(
       el("div", "rlb-muted bp3-text-small", `${days[0]?.key} \u2192 ${days[days.length - 1]?.key}`)
     );
+    return section;
+  };
+  const categoriesSection = (rows) => {
+    const section = el("section", "rlb-section");
+    const heading = el("div", "rlb-section__heading");
+    heading.appendChild(el("h3", "rlb-section__title", "By category"));
+    heading.appendChild(
+      button("bp3-button bp3-minimal bp3-small bp3-icon-cog", "", () => {
+        close();
+        void openCategoryConfig();
+      }, { title: `Edit the category list on ${CONFIG_PAGE_TITLE}` })
+    );
+    section.appendChild(heading);
+    const table = el("table", "rlb-table");
+    table.appendChild(
+      headerRow([
+        "Category",
+        { label: "Share" },
+        { label: "Tasks", numeric: true },
+        { label: "Sessions", numeric: true },
+        { label: "Time", numeric: true }
+      ])
+    );
+    const tbody = el("tbody");
+    for (const row of rows) {
+      const tr = el("tr");
+      if (row.minutes === 0)
+        tr.classList.add("rlb-row--idle");
+      const name = el("td", "rlb-cell");
+      name.appendChild(
+        el("span", row.name ? "" : "rlb-muted", row.name ?? "Uncategorised")
+      );
+      const percent = Math.round(row.share * 100);
+      const share = el("td", "rlb-share-cell");
+      const track = el("div", "rlb-share");
+      track.title = `${percent}% of ${formatMinutesHuman(
+        rows.reduce((sum, each) => sum + each.minutes, 0)
+      )}`;
+      const fill = el("div", "rlb-share__fill");
+      fill.style.width = `${percent}%`;
+      track.appendChild(fill);
+      share.appendChild(track);
+      tr.append(
+        name,
+        share,
+        el("td", "rlb-table__num rlb-muted", row.tasks ? String(row.tasks) : ""),
+        el("td", "rlb-table__num rlb-muted", row.sessions ? String(row.sessions) : ""),
+        el("td", "rlb-table__num rlb-tree__total", formatMinutesHuman(row.minutes))
+      );
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    section.appendChild(table);
+    if (rows.some((row) => row.name === null)) {
+      section.appendChild(
+        el(
+          "div",
+          "rlb-muted bp3-text-small rlb-tree__note",
+          "Uncategorised is everything with no category tag on the task or above it."
+        )
+      );
+    }
     return section;
   };
   const tasksSection = (tree) => {
@@ -1553,6 +1797,32 @@ var STYLES = `
     min-width: 0;
 }
 
+/* The share bar reads as a proportion of the range, so the column keeps a fixed
+   share of the table rather than sizing to its content \u2014 bars that change width
+   between renders cannot be compared by eye. */
+.rlb-share-cell {
+    width: 34%;
+    vertical-align: middle;
+}
+
+.rlb-share {
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(167, 182, 194, 0.3);
+    overflow: hidden;
+}
+
+.rlb-share__fill {
+    height: 100%;
+    background: #2d72d2;
+    border-radius: 3px;
+}
+
+/* A configured category with nothing against it: present but plainly quiet. */
+.rlb-row--idle td {
+    opacity: 0.5;
+}
+
 .rlb-section__heading {
     display: flex;
     align-items: center;
@@ -1994,7 +2264,8 @@ var PALETTE_COMMANDS = [
   "Logbook: Clock out current block",
   "Logbook: Clock out all running clocks",
   "Logbook: Open dashboard",
-  "Logbook: Check for unfinished clocks"
+  "Logbook: Check for unfinished clocks",
+  "Logbook: Edit categories"
 ];
 function createController({ extensionAPI: extensionAPI2 }) {
   const dashboard = createDashboard();
@@ -2128,6 +2399,7 @@ function createController({ extensionAPI: extensionAPI2 }) {
       refresh();
       dashboard.open();
     });
+    add(PALETTE_COMMANDS[6], () => guard(() => openCategoryConfig()));
     window.roamAlphaAPI.ui.blockContextMenu.addCommand({
       label: CONTEXT_CLOCK_IN,
       "display-conditional": canClockIn,

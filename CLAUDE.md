@@ -27,8 +27,16 @@ leaks into what gets written, every later structural edit makes old entries lie.
 
 Layering, innermost first:
 
-- `time.js`, `org.js`, `stats.js` — pure. Timestamp/duration math, the org LOGBOOK
-  text format, and dashboard aggregation. Fully unit-tested.
+- `time.js`, `org.js`, `stats.js`, `categories.js` — pure. Timestamp/duration math,
+  the org LOGBOOK text format, dashboard aggregation, and which category a task
+  belongs to. Fully unit-tested.
+- `config.js` — the category list, read off `roam/depot/roam-logbook` rather than
+  out of extension settings, because a category is a page: the list stays
+  clickable and a rename carries every tagged task with it. Categories are matched
+  on the task text the entries already carry, so the split costs no query beyond
+  reading that one page, and — like the tree — it is resolved at *read* time, so
+  re-tagging never rewrites history. Each task lands in at most one category,
+  which is what keeps those rows summing to the headline figure.
 - `roam.js` — the only module that touches `window.roamAlphaAPI`. Degrades to
   `null`/`[]` when a namespace is missing so it stays importable under Node.
 - `entries.js`, `clock.js` — read entries out of the graph; clock in/out/discard.
@@ -84,3 +92,8 @@ real graph:
 
 Test uids must be at least 6 characters: the block-reference regex ignores shorter
 ones, and real Roam uids are 9.
+
+Never seed a fixture with a hard-coded date. The dashboard's default range is the
+last 7 days, so `[2026-08-08 Sat 09:00]` passes for a week and then silently drops
+out of range, taking the row it feeds with it — three lifecycle tests rotted that
+way. `closedClockToday` in `test/lifecycle.test.js` stamps relative to now.

@@ -104,6 +104,17 @@ export function getChildren(uid) {
         .sort((a, b) => a.order - b.order);
 }
 
+/** Uid of a page by title, or null when the page does not exist. */
+export function getPageUid(title) {
+    if (!title) return null;
+    const rows = query(
+        `[:find ?page-uid :in $ ?title
+          :where [?p :node/title ?title] [?p :block/uid ?page-uid]]`,
+        title
+    );
+    return rows[0]?.[0] ?? null;
+}
+
 export function getPageTitleOfBlock(uid) {
     if (!uid) return null;
     const rows = query(
@@ -112,6 +123,14 @@ export function getPageTitleOfBlock(uid) {
         uid
     );
     return rows[0]?.[0] ?? null;
+}
+
+export async function createPage(title, uid) {
+    const create = resolve('page', 'create', 'createPage');
+    if (!create) throw new Error('roamAlphaAPI page.create unavailable');
+    const pageUid = uid || generateUid();
+    await create({ page: { title, uid: pageUid } });
+    return pageUid;
 }
 
 export async function createBlock({ parentUid, order, string, uid }) {
@@ -154,5 +173,15 @@ export async function openBlock(uid) {
         await api?.ui?.mainWindow?.openBlock?.({ block: { uid } });
     } catch (error) {
         console.error('[roam-logbook] could not open block', uid, error);
+    }
+}
+
+/** Open a page in the main window. */
+export async function openPage(title) {
+    const api = getApi();
+    try {
+        await api?.ui?.mainWindow?.openPage?.({ page: { title } });
+    } catch (error) {
+        console.error('[roam-logbook] could not open page', title, error);
     }
 }

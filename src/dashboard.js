@@ -6,6 +6,7 @@
  */
 
 import * as clock from './clock.js';
+import { CONFIG_PAGE_TITLE, openCategoryConfig, readCategories } from './config.js';
 import { button, el } from './dom.js';
 import { readAllEntries, readHierarchy } from './entries.js';
 import { openBlock } from './roam.js';
@@ -29,7 +30,12 @@ export function createDashboard() {
         const now = new Date();
         const entries = readAllEntries();
         const hierarchy = readHierarchy([...new Set(entries.map(entry => entry.taskUid))]);
-        const model = buildDashboard(entries, { now, rangeId, hierarchy });
+        const model = buildDashboard(entries, {
+            now,
+            rangeId,
+            hierarchy,
+            categories: readCategories(),
+        });
         bodyNode.replaceChildren();
 
         // Today and the last week are always shown; a third card for the selected
@@ -57,6 +63,10 @@ export function createDashboard() {
         }
 
         bodyNode.appendChild(daysSection(model.days));
+        // Broadest cut first: where the time went, then which tasks it went into.
+        if (model.categories.length > 0) {
+            bodyNode.appendChild(categoriesSection(model.categories));
+        }
         bodyNode.appendChild(tasksSection(model.tree));
     };
 
@@ -144,6 +154,82 @@ export function createDashboard() {
         section.appendChild(
             el('div', 'rlb-muted bp3-text-small', `${days[0]?.key} → ${days[days.length - 1]?.key}`)
         );
+        return section;
+    };
+
+    /**
+     * Where the time went, one row per category from the config page.
+     *
+     * Rows never overlap here — a task carries one category — so unlike the task
+     * tree below, these figures add up to the total at the top of the dialog.
+     */
+    const categoriesSection = rows => {
+        const section = el('section', 'rlb-section');
+        const heading = el('div', 'rlb-section__heading');
+        heading.appendChild(el('h3', 'rlb-section__title', 'By category'));
+        heading.appendChild(
+            button('bp3-button bp3-minimal bp3-small bp3-icon-cog', '', () => {
+                close();
+                void openCategoryConfig();
+            }, { title: `Edit the category list on ${CONFIG_PAGE_TITLE}` })
+        );
+        section.appendChild(heading);
+
+        const table = el('table', 'rlb-table');
+        table.appendChild(
+            headerRow([
+                'Category',
+                { label: 'Share' },
+                { label: 'Tasks', numeric: true },
+                { label: 'Sessions', numeric: true },
+                { label: 'Time', numeric: true },
+            ])
+        );
+
+        const tbody = el('tbody');
+        for (const row of rows) {
+            const tr = el('tr');
+            // A configured category with no time still gets a row; it reads as
+            // absent rather than as an error.
+            if (row.minutes === 0) tr.classList.add('rlb-row--idle');
+
+            const name = el('td', 'rlb-cell');
+            name.appendChild(
+                el('span', row.name ? '' : 'rlb-muted', row.name ?? 'Uncategorised')
+            );
+
+            const percent = Math.round(row.share * 100);
+            const share = el('td', 'rlb-share-cell');
+            const track = el('div', 'rlb-share');
+            track.title = `${percent}% of ${formatMinutesHuman(
+                rows.reduce((sum, each) => sum + each.minutes, 0)
+            )}`;
+            const fill = el('div', 'rlb-share__fill');
+            fill.style.width = `${percent}%`;
+            track.appendChild(fill);
+            share.appendChild(track);
+
+            tr.append(
+                name,
+                share,
+                el('td', 'rlb-table__num rlb-muted', row.tasks ? String(row.tasks) : ''),
+                el('td', 'rlb-table__num rlb-muted', row.sessions ? String(row.sessions) : ''),
+                el('td', 'rlb-table__num rlb-tree__total', formatMinutesHuman(row.minutes))
+            );
+            tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        section.appendChild(table);
+
+        if (rows.some(row => row.name === null)) {
+            section.appendChild(
+                el(
+                    'div',
+                    'rlb-muted bp3-text-small rlb-tree__note',
+                    'Uncategorised is everything with no category tag on the task or above it.'
+                )
+            );
+        }
         return section;
     };
 

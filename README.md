@@ -24,7 +24,37 @@ the session so far, the pomodoro target when one is set, everything banked again
 
 **Pomodoro** — right-click a task and choose **Logbook: Start pomodoro**, or hit the stopwatch on a row in the popover to put a target on a session already running. The counter becomes `12:34 / 30:00`. Past the target the entry turns a soft red and **keeps counting** — nothing stops on its own, because only you know whether to push on or break. Length is configurable, 30 minutes by default.
 
-**Dashboard** — `Logbook: Open dashboard`, or the button in the popover. Totals for today and the last 7 days, a per-day bar row, and a per-task tree over the range you pick.
+**Dashboard** — `Logbook: Open dashboard`, or the button in the popover. Totals for today and the last 7 days, a per-day bar row, a per-category split, and a per-task tree over the range you pick.
+
+### Categories
+
+Tag a task with a category and the dashboard adds a **By category** row for it:
+
+```
+                        Share      Tasks  Sessions   Time
+Product & Engineering   ███████░░░   2       9      9h 37m
+Personal Admin          █░░░░░░░░░   1       1         41m
+Strategy                ░░░░░░░░░░                      0m
+Uncategorised           ███░░░░░░░   6       6      4h 13m
+```
+
+Which pages count as categories is configured in the graph, on a page called `roam/depot/roam-logbook`. Everything under its `category` block is a category; everything else on the page, and every other tag in your graph, is ignored:
+
+```
+roam/depot/roam-logbook
+  - category
+    - [[Product & Engineering]]
+    - [[Strategy]]
+    - [[Company Admin]]
+```
+
+`Logbook: Edit categories`, or the cog on the section, opens that page — creating it and the `category` block if they are not there yet.
+
+- `#[[Product & Engineering]]`, `[[Product & Engineering]]` and `#Strategy` are the same reference to Roam, so all three count as the tag. Case is ignored.
+- A sub-task with no tag of its own takes the category of the nearest task above it, so tagging the project is enough and each piece of work does not have to repeat it. That inheritance follows a `((reference))` as well, the same way the task tree does.
+- A task carrying two configured categories counts once, under the first one on the config page. Every session lands in exactly one row, so unlike the task tree these rows do not overlap and they add up to the total at the top of the dialog.
+- A configured category with nothing against it keeps its row, at zero — an empty week is worth seeing. Anything untagged is gathered into a single `Uncategorised` row rather than dropped.
+- With no config page, or nothing under `category`, the section is simply not shown.
 
 ### Sub-tasks
 
@@ -73,6 +103,8 @@ By default, clocking in closes whatever was running, the way org-mode behaves. T
 | Only offer clock in on TODO blocks | on | Off lets any block be clocked |
 | Allow multiple clocks at once | off | On runs several clocks in parallel |
 | Flag unfinished clocks after | 8h | When a running clock is called out as forgotten |
+
+The category list is deliberately not here: it is a list of pages, so it lives in the graph on `roam/depot/roam-logbook` where you can click through it, and where renaming a category takes every tagged task with it.
 
 ## Notes
 
