@@ -414,6 +414,32 @@ export const STYLES = `
     min-width: 0;
 }
 
+/* The share bar reads as a proportion of the range, so the column keeps a fixed
+   share of the table rather than sizing to its content — bars that change width
+   between renders cannot be compared by eye. */
+.rlb-share-cell {
+    width: 34%;
+    vertical-align: middle;
+}
+
+.rlb-share {
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(167, 182, 194, 0.3);
+    overflow: hidden;
+}
+
+.rlb-share__fill {
+    height: 100%;
+    background: #2d72d2;
+    border-radius: 3px;
+}
+
+/* A configured category with nothing against it: present but plainly quiet. */
+.rlb-row--idle td {
+    opacity: 0.5;
+}
+
 .rlb-section__heading {
     display: flex;
     align-items: center;

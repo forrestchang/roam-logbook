@@ -7,6 +7,7 @@
  */
 
 import * as clock from './clock.js';
+import { openCategoryConfig } from './config.js';
 import { createDashboard } from './dashboard.js';
 import { injectStyles, removeStyles } from './dom.js';
 import { getBlockString, getFocusedBlockUid } from './roam.js';
@@ -37,6 +38,7 @@ const PALETTE_COMMANDS = [
     'Logbook: Clock out all running clocks',
     'Logbook: Open dashboard',
     'Logbook: Check for unfinished clocks',
+    'Logbook: Edit categories',
 ];
 
 function createController({ extensionAPI }) {
@@ -190,6 +192,7 @@ function createController({ extensionAPI }) {
             clock.refresh();
             dashboard.open();
         });
+        add(PALETTE_COMMANDS[6], () => guard(() => openCategoryConfig()));
 
         window.roamAlphaAPI.ui.blockContextMenu.addCommand({
             label: CONTEXT_CLOCK_IN,

@@ -51,6 +51,21 @@ const clock = await import('../src/clock.js');
 const pomodoro = await import('../src/pomodoro.js');
 const { formatStamp } = await import('../src/time.js');
 
+/**
+ * A closed session earlier today.
+ *
+ * The dashboard's default range is the last 7 days, so a hard-coded date drops
+ * out of it a week after it is written and takes the row it feeds with it.
+ */
+const closedClockToday = (fromHour, toHour) => {
+    const at = hour => {
+        const date = new Date();
+        date.setHours(hour, 0, 0, 0);
+        return date;
+    };
+    return `CLOCK:: ${formatStamp(at(fromHour))}--${formatStamp(at(toHour))} => ${toHour - fromHour}:00`;
+};
+
 const topbarWidget = () => document.getElementById('roam-logbook-topbar');
 const dialog = () => document.getElementById('roam-logbook-dashboard');
 const click = node => node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
@@ -61,7 +76,7 @@ test.after(() => extension.onunload());
 test('onload mounts the topbar widget and registers every command', () => {
     assert.ok(topbarWidget(), 'widget should be attached to .rm-topbar');
     assert.equal(settingsPanel.tabTitle, 'Logbook');
-    assert.equal(paletteCommands.size, 6);
+    assert.equal(paletteCommands.size, 7);
     assert.deepEqual(
         [...contextCommands.keys()],
         ['Logbook: Clock in', 'Logbook: Start pomodoro', 'Logbook: Clock out']
@@ -223,7 +238,7 @@ test('the task tree collapses and expands from the caret', () => {
     });
     graph.store.set('clock00001', {
         uid: 'clock00001',
-        string: 'CLOCK:: [2026-08-08 Sat 09:00]--[2026-08-08 Sat 10:00] => 1:00',
+        string: closedClockToday(9, 10),
         parent: 'drawer0001',
         order: 0,
         page: 'Test Page',
@@ -269,6 +284,47 @@ test('collapsed state survives a re-render', () => {
     select.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
 
     assert.equal(dialog().querySelectorAll('.rlb-tree__cell').length, 1, 'still collapsed');
+});
+
+test('the dashboard groups by the categories on the config page', () => {
+    const CATEGORY = 'Product & Engineering';
+    graph.store.set('configpage', {
+        uid: 'configpage',
+        string: '',
+        title: 'roam/depot/roam-logbook',
+        parent: null,
+        order: 20,
+    });
+    graph.store.set('categoryblk', {
+        uid: 'categoryblk',
+        string: 'category',
+        parent: 'configpage',
+        order: 0,
+    });
+    graph.store.set('category001', {
+        uid: 'category001',
+        string: `[[${CATEGORY}]]`,
+        parent: 'categoryblk',
+        order: 0,
+    });
+    // Only the top task is tagged; the sub-task under it carries no tag at all.
+    graph.store.get('taskone01').string = `{{[[TODO]]}} this is a test task #[[${CATEGORY}]]`;
+
+    paletteCommands.get('Logbook: Open dashboard')();
+
+    const section = [...dialog().querySelectorAll('.rlb-section')].find(node =>
+        node.textContent.startsWith('By category')
+    );
+    assert.ok(section, 'a By category section appears once categories are configured');
+
+    const cells = [...section.querySelectorAll('tbody tr')].map(row =>
+        [...row.children].map(cell => cell.textContent)
+    );
+    // No Uncategorised row: the sub-task inherits the category of the task above it.
+    assert.deepEqual(cells.map(row => row[0]), [CATEGORY]);
+    assert.equal(cells[0][2], '2', 'the tagged task and its sub-task both counted');
+
+    graph.store.get('taskone01').string = '{{[[TODO]]}} this is a test task';
 });
 
 test('Escape closes the dashboard', () => {

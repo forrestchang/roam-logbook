@@ -14,12 +14,15 @@ export function installGraph(blocks = []) {
     const store = new Map();
     const pullWatches = new Set();
 
+    // A seed carrying `title` stands for a page node: no string of its own, and
+    // findable by title the way `getPageUid` looks one up.
     for (const block of blocks) {
         store.set(block.uid, {
             uid: block.uid,
-            string: block.string,
+            string: block.string ?? '',
+            title: block.title ?? null,
             parent: block.parent ?? null,
-            page: block.page ?? 'Test Page',
+            page: block.page ?? block.title ?? 'Test Page',
         });
     }
 
@@ -74,6 +77,10 @@ export function installGraph(blocks = []) {
             }
             return rows;
         }
+        if (datalog.includes(':find ?page-uid')) {
+            const page = [...store.values()].find(block => block.title === args[0]);
+            return page ? [[page.uid]] : [];
+        }
         if (datalog.includes(':find ?title')) {
             const block = store.get(args[0]);
             return block ? [[block.page]] : [];
@@ -106,6 +113,18 @@ export function installGraph(blocks = []) {
                     }
                 }
             },
+            page: {
+                create: async ({ page }) => {
+                    store.set(page.uid, {
+                        uid: page.uid,
+                        string: '',
+                        title: page.title,
+                        parent: null,
+                        order: order++,
+                        page: page.title,
+                    });
+                },
+            },
             block: {
                 create: async ({ location, block }) => {
                     store.set(block.uid, {
@@ -132,7 +151,7 @@ export function installGraph(blocks = []) {
         },
         ui: {
             getFocusedBlock: () => null,
-            mainWindow: { openBlock: async () => {} },
+            mainWindow: { openBlock: async () => {}, openPage: async () => {} },
         },
     };
 
