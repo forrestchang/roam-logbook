@@ -6,6 +6,7 @@
  * read and keeps a session an indivisible thing.
  */
 
+import { assignCategories } from './categories.js';
 import { isTaskBlock, taskStatus, taskTitle } from './org.js';
 import { dateKey, startOfDay, startOfDaysAgo } from './time.js';
 
@@ -67,6 +68,54 @@ export function summariseByTask(entries, now) {
     }
 
     return [...byTask.values()].sort((a, b) => b.minutes - a.minutes);
+}
+
+/**
+ * One row per configured category, heaviest first.
+ *
+ * Every entry lands in exactly one row — a task belongs to a single category —
+ * so unlike the task tree these rows never overlap and they add up to the
+ * headline figure. A configured category with nothing against it still gets a
+ * row: an empty week is a finding, and it also makes it obvious that the config
+ * page is being read at all. Whatever carries no category is gathered into one
+ * trailing row instead of being dropped, so nothing goes missing from the total.
+ *
+ * @param {Map<string,string|null>} categoryOf task uid → category name
+ * @returns {Array<{name: string|null, minutes: number, sessions: number,
+ *   tasks: number, share: number}>} `name` is null on the untagged row
+ */
+export function summariseByCategory(entries, { categoryOf, categories, now }) {
+    if (categories.length === 0) return [];
+
+    const rows = new Map(
+        categories.map(name => [name, { name, minutes: 0, sessions: 0, tasks: new Set() }])
+    );
+    const untagged = { name: null, minutes: 0, sessions: 0, tasks: new Set() };
+
+    for (const entry of entries) {
+        const name = categoryOf.get(entry.taskUid) ?? null;
+        const row = (name !== null && rows.get(name)) || untagged;
+        row.minutes += entryMinutes(entry, now);
+        row.sessions += 1;
+        row.tasks.add(entry.taskUid);
+    }
+
+    const total = totalMinutes(entries, now);
+    const finish = row => ({
+        name: row.name,
+        minutes: row.minutes,
+        sessions: row.sessions,
+        tasks: row.tasks.size,
+        share: total > 0 ? row.minutes / total : 0,
+    });
+
+    const rank = new Map(categories.map((name, index) => [name, index]));
+    const listed = [...rows.values()]
+        .sort((a, b) => b.minutes - a.minutes || rank.get(a.name) - rank.get(b.name))
+        .map(finish);
+
+    // Untagged goes last whatever its size: it is the leftover, not a category.
+    return untagged.sessions > 0 ? [...listed, finish(untagged)] : listed;
 }
 
 /** Contiguous per-day totals, oldest first — a gapless series to draw bars from. */
@@ -226,12 +275,22 @@ export function flattenForest(forest, options = {}, depth = 0) {
 }
 
 /** Everything the dashboard renders, computed in one pass. */
-export function buildDashboard(entries, { now, rangeId, hierarchy = EMPTY_HIERARCHY }) {
+export function buildDashboard(
+    entries,
+    { now, rangeId, hierarchy = EMPTY_HIERARCHY, categories = [] }
+) {
     const inRange = filterByRange(entries, rangeId, now);
     const tasks = summariseByTask(inRange, now);
+    // Categories are read off the task text, which the entries already carry, so
+    // this costs no extra queries — same as the tree, structure resolved on read.
+    const taskStrings = {};
+    for (const entry of inRange) taskStrings[entry.taskUid] ??= entry.taskString;
+    const categoryOf = assignCategories(taskStrings, { categories, hierarchy });
     return {
         rangeId,
         entries: inRange,
+        categoryOf,
+        categories: summariseByCategory(inRange, { categoryOf, categories, now }),
         // Summed from entries, so this stays the honest figure even when the tree
         // shows the same task under more than one parent.
         totalMinutes: totalMinutes(inRange, now),

@@ -34,8 +34,17 @@ globalThis.window = {
 };
 
 const { readAllEntries, readHierarchy } = await import(`${src}/entries.js`);
+const { CONFIG_PAGE_TITLE, readCategories } = await import(`${src}/config.js`);
 const { buildDashboard, flattenForest } = await import(`${src}/stats.js`);
 const { formatMinutesHuman } = await import(`${src}/time.js`);
+
+// Read before the early exit below: an empty config page is worth seeing even in
+// a graph with nothing clocked yet.
+const categories = readCategories();
+console.log(
+    `${categories.length} categories on ${CONFIG_PAGE_TITLE}` +
+        (categories.length > 0 ? `: ${categories.join(', ')}` : '')
+);
 
 const entries = readAllEntries();
 console.log(`${entries.length} clock entries`);
@@ -57,7 +66,18 @@ const hierarchy = readHierarchy(taskUids);
 console.log(`\nparentOf   ${JSON.stringify(hierarchy.parentOf)}`);
 console.log(`mirrorsOf  ${JSON.stringify(hierarchy.mirrorsOf)}`);
 
-const model = buildDashboard(entries, { now: new Date(), rangeId: 'all', hierarchy });
+const model = buildDashboard(entries, { now: new Date(), rangeId: 'all', hierarchy, categories });
+
+if (model.categories.length > 0) {
+    console.log('\nBy category');
+    for (const row of model.categories) {
+        const share = `${Math.round(row.share * 100)}%`.padStart(4);
+        console.log(
+            `  ${(row.name ?? 'Uncategorised').padEnd(24)} ${formatMinutesHuman(row.minutes).padStart(8)}` +
+                `  ${share}  ${row.tasks} task(s), ${row.sessions} session(s)`
+        );
+    }
+}
 
 console.log('\nBy task');
 for (const node of flattenForest(model.tree)) {
