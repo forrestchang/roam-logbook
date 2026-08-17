@@ -104,6 +104,26 @@ test('clocking in through the context menu writes the drawer and lights the widg
         topbarWidget().querySelector('.rlb-topbar__button--running'),
         'widget should show the running state'
     );
+    assert.equal(graph.pullWatchCount(), 1, 'the running task should be watched for completion');
+});
+
+test('marking the active task done stops its clock immediately', async () => {
+    const [entry] = clock.getRunning();
+
+    await graph.api.data.block.update({
+        block: { uid: 'taskone01', string: '{{[[DONE]]}} this is a test task' },
+    });
+
+    assert.equal(clock.getRunning().length, 0);
+    assert.match(graph.store.get(entry.clockUid).string, /\]--\[.*\] => \d+:\d\d$/);
+    assert.equal(graph.pullWatchCount(), 0);
+
+    // Restore a running TODO for the remaining lifecycle assertions.
+    await graph.api.data.block.update({
+        block: { uid: 'taskone01', string: '{{[[TODO]]}} this is a test task' },
+    });
+    await contextCommands.get('Logbook: Clock in').callback({ 'block-uid': 'taskone01' });
+    assert.equal(clock.getRunning().length, 1);
 });
 
 test('the widget shows the task total alongside the running session', () => {
@@ -350,4 +370,5 @@ test('onunload removes every trace of the extension', () => {
     assert.equal(document.getElementById('roam-logbook-styles'), null);
     assert.equal(contextCommands.size, 0);
     assert.equal(paletteCommands.size, 0);
+    assert.equal(graph.pullWatchCount(), 0);
 });

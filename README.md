@@ -12,7 +12,7 @@ Entries are stored in the graph in org's own format, as a `LOGBOOK::` drawer und
 
 ## Use
 
-**Clock in** — right-click a TODO bullet → **Plugins** → **Logbook: Clock in**. The same menu offers **Logbook: Clock out** while a clock is running. Both are also in the Command Palette, acting on the block you are editing.
+**Clock in** — right-click a TODO bullet → **Plugins** → **Logbook: Clock in**. The same menu offers **Logbook: Clock out** while a clock is running. Both are also in the Command Palette, acting on the block you are editing. Marking a running task `DONE` closes its clock immediately.
 
 **Topbar** — sits just past Roam's back/forward arrows, so it neither displaces the navigation nor crowds the buttons on the right. Idle it is a single clock icon; running it reads
 

@@ -176,6 +176,34 @@ function getBlockString(uid) {
   );
   return rows[0]?.[0] ?? null;
 }
+function watchBlockString(uid, callback) {
+  const add = resolve(null, "addPullWatch");
+  const remove = resolve(null, "removePullWatch");
+  if (!uid || !add || !remove)
+    return () => {
+    };
+  const pattern = "[:block/string]";
+  const entityId = `[:block/uid ${JSON.stringify(uid)}]`;
+  const handler = (_before, after) => callback(after?.[":block/string"] ?? getBlockString(uid));
+  try {
+    add(pattern, entityId, handler);
+  } catch (error) {
+    console.error("[roam-logbook] could not watch task status", error);
+    return () => {
+    };
+  }
+  let watching = true;
+  return () => {
+    if (!watching)
+      return;
+    watching = false;
+    try {
+      remove(pattern, entityId, handler);
+    } catch (error) {
+      console.error("[roam-logbook] could not remove task-status watch", error);
+    }
+  };
+}
 function resolveReferencedUid(uid) {
   const seen = /* @__PURE__ */ new Set();
   let current = uid;
@@ -458,6 +486,50 @@ function refresh() {
 function reset() {
   running = [];
   listeners.clear();
+}
+function attachTaskCompletion({ now = () => /* @__PURE__ */ new Date() } = {}) {
+  const watches = /* @__PURE__ */ new Map();
+  const stopping = /* @__PURE__ */ new Map();
+  let detached = false;
+  const stopIfDone = (taskUid, string) => {
+    if (detached || taskStatus(string) !== "DONE")
+      return Promise.resolve(false);
+    if (stopping.has(taskUid))
+      return stopping.get(taskUid);
+    const operation = clockOutBlock(taskUid, { now: now() }).catch((error) => {
+      console.error("[roam-logbook] could not stop completed task", error);
+      return false;
+    }).finally(() => stopping.delete(taskUid));
+    stopping.set(taskUid, operation);
+    return operation;
+  };
+  const unsubscribe = subscribe((entries) => {
+    const activeTaskUids = new Set(entries.map((entry) => entry.taskUid));
+    for (const [taskUid, unwatch] of watches) {
+      if (activeTaskUids.has(taskUid))
+        continue;
+      unwatch();
+      watches.delete(taskUid);
+    }
+    for (const entry of entries) {
+      if (!watches.has(entry.taskUid)) {
+        watches.set(
+          entry.taskUid,
+          watchBlockString(entry.taskUid, (string) => stopIfDone(entry.taskUid, string))
+        );
+      }
+      void stopIfDone(entry.taskUid, entry.taskString);
+    }
+  });
+  return () => {
+    if (detached)
+      return;
+    detached = true;
+    unsubscribe();
+    for (const unwatch of watches.values())
+      unwatch();
+    watches.clear();
+  };
 }
 function resolveTaskUid(uid) {
   return resolveReferencedUid(uid);
@@ -2272,6 +2344,7 @@ function createController({ extensionAPI: extensionAPI2 }) {
   const topbar = createTopbar({ onOpenDashboard: () => dashboard.open() });
   let destroyed = false;
   let detachPomodoro = null;
+  let detachTaskCompletion = null;
   const targetString = (context) => {
     const uid = resolveTaskUid(context?.["block-uid"]);
     return getBlockString(uid) ?? context?.["block-string"] ?? "";
@@ -2432,6 +2505,7 @@ function createController({ extensionAPI: extensionAPI2 }) {
       registerCommands();
       load();
       detachPomodoro = attach();
+      detachTaskCompletion = attachTaskCompletion();
       topbar.mount();
       refresh();
     },
@@ -2439,6 +2513,8 @@ function createController({ extensionAPI: extensionAPI2 }) {
       if (destroyed)
         return;
       destroyed = true;
+      detachTaskCompletion?.();
+      detachTaskCompletion = null;
       detachPomodoro?.();
       detachPomodoro = null;
       reset2();
